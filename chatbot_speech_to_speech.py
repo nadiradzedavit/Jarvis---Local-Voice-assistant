@@ -704,30 +704,56 @@ class VoiceAssistant:
 
     # ── Clipboard helpers ─────────────────────────────────────────────────────
 
-    # Phrases that signal "process my clipboard with the LLM"
-    _CLIPBOARD_TRIGGERS = (
-        "improve this", "fix this", "rewrite this", "correct this",
-        "proofread this", "summarize this", "summarize the text",
-        "translate this", "make this shorter", "make this longer",
-        "make this more formal", "make this casual", "simplify this",
-        "explain this",
+    # Action words that, combined with clipboard context, trigger clipboard mode
+    _CLIPBOARD_ACTIONS = (
+        "improve", "fix", "rewrite", "correct", "proofread", "summarize",
+        "translate", "shorten", "lengthen", "shorter", "longer",
+        "formal", "casual", "informal", "simplify", "explain", "clean up",
+        "rephrase", "paraphrase", "polish", "edit", "check",
+        # German
+        "verbessere", "verbessern", "korrigiere", "korrigieren", "übersetze",
+        "übersetzen", "kürze", "formuliere", "umschreiben", "prüfe",
+    )
+
+    # Explicit clipboard references — any of these alone triggers clipboard mode
+    _CLIPBOARD_REFS = (
+        "clipboard", "my clipboard", "the clipboard",
+        "what i copied", "what i've copied", "the text i copied",
+        "this text", "the text", "my text",
+        # German
+        "zwischenablage", "was ich kopiert habe", "den text",
     )
 
     def _try_augment_clipboard(self, text: str) -> tuple[str, bool]:
         """
-        If the utterance is a clipboard command, read the clipboard and
-        append its content to the prompt so the LLM can act on it.
+        Detect clipboard commands and inject the clipboard content into the prompt.
+        Also injects an instruction so the LLM returns ONLY the processed text
+        (no preamble), making it safe to copy straight back to clipboard.
         Returns (augmented_text, is_clipboard_command).
         """
-        t = text.lower()
-        if not any(trigger in t for trigger in self._CLIPBOARD_TRIGGERS):
+        t = text.lower().strip()
+
+        has_ref    = any(ref in t for ref in self._CLIPBOARD_REFS)
+        has_action = any(act in t for act in self._CLIPBOARD_ACTIONS)
+
+        if not (has_ref or has_action):
             return text, False
+
         clipboard = subprocess.run(
             ["pbpaste"], capture_output=True, text=True
         ).stdout.strip()
+
         if not clipboard:
-            return text + "\n(Note: clipboard is empty)", False
-        return f"{text}\n\nClipboard content:\n{clipboard}", True
+            # No clipboard content — still pass to LLM but don't copy back
+            return text, False
+
+        augmented = (
+            f"{text}\n\n"
+            f"Text to process:\n{clipboard}\n\n"
+            f"IMPORTANT: Reply with ONLY the processed/improved text. "
+            f"No preamble, no explanation, no quotes — just the result."
+        )
+        return augmented, True
 
     def _copy_to_clipboard(self, text: str) -> None:
         subprocess.run(["pbcopy"], input=text.encode(), check=False)
@@ -1164,10 +1190,10 @@ class VoiceAssistant:
                 self.handle_turn(augmented_input)
                 # Copy LLM response back to clipboard when requested
                 if is_clipboard and self.history:
-                    last = self.history[-1].get("content", "")
+                    last = self.history[-1].get("content", "").strip()
                     if last:
                         self._copy_to_clipboard(last)
-                        print("📋  Response copied to clipboard.", flush=True)
+                        print("📋  Improved text copied to clipboard.", flush=True)
 
             print()
 
